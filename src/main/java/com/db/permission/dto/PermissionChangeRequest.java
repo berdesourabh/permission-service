@@ -19,7 +19,7 @@ public record PermissionChangeRequest(
         @Pattern(regexp = SqlValidator.DATABASE_TABLE_PATTERN, message = "must be a valid table name")
         String table,
         @NotEmpty
-        List<@NotNull @Pattern(regexp = "(?i)SELECT|INSERT|UPDATE|DELETE|ALL", message = "must be one of: SELECT, INSERT, UPDATE, DELETE, ALL") String> permissions
+        List<@NotNull @Pattern(regexp = "(?i)SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|ALL", message = "must be one of: SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, ALL") String> permissions
         ) {
 
 }

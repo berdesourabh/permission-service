@@ -82,6 +82,40 @@ class PermissionRepositoryTest {
         assertThat(tablePrivileges()).contains("SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER");
     }
 
+    @Test
+    void grantQuotesHyphenatedDatabaseName() {
+        jdbcTemplate.execute("CREATE DATABASE IF NOT EXISTS `my-db`");
+        jdbcTemplate.execute("CREATE TABLE IF NOT EXISTS `my-db`.t (id BIGINT PRIMARY KEY)");
+
+        permissionRepository.grant("sourabh", "my-db", "t", EnumSet.of(Privilege.SELECT));
+
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT PRIVILEGE_TYPE
+                FROM information_schema.TABLE_PRIVILEGES
+                WHERE GRANTEE = '''sourabh''@''%''' AND TABLE_SCHEMA = 'my-db' AND TABLE_NAME = 't'
+                """, String.class))
+                .containsExactly("SELECT");
+    }
+
+    @Test
+    void grantAddsCreateDropAndAlter() {
+        permissionRepository.grant("sourabh", "shop", "orders", EnumSet.of(Privilege.CREATE, Privilege.DROP, Privilege.ALTER));
+
+        assertThat(tablePrivileges()).containsExactlyInAnyOrder("CREATE", "DROP", "ALTER");
+    }
+
+    @Test
+    void getAllTablesInDatabaseReturnsTablesOfThatDatabase() {
+        jdbcTemplate.execute("CREATE TABLE IF NOT EXISTS shop.customers (id BIGINT PRIMARY KEY)");
+
+        assertThat(permissionRepository.getAllTablesInDatabase("shop")).contains("orders", "customers");
+    }
+
+    @Test
+    void getAllTablesInDatabaseReturnsEmptyForMissingDatabase() {
+        assertThat(permissionRepository.getAllTablesInDatabase("nodb")).isEmpty();
+    }
+
     private List<String> tablePrivileges() {
         return jdbcTemplate.queryForList("""
                 SELECT PRIVILEGE_TYPE

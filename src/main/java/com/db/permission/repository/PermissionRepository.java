@@ -1,6 +1,8 @@
 package com.db.permission.repository;
 
 import java.util.EnumSet;
+import java.util.HashSet;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,6 +29,18 @@ public class PermissionRepository {
         String sql = "GRANT " + buildPrivilegeString(permissions) + " ON " + quoteTable(database, table) + " TO " + quoteUserName(username);
         log.info("Executing SQL: {}", sql);
         jdbcTemplate.execute(sql);
+    }
+
+    public void revoke(String username, String database, String table, EnumSet<Privilege> permissions) {
+
+        String sql = "REVOKE " + buildPrivilegeString(permissions) + " ON " + quoteTable(database, table) + " FROM " + quoteUserName(username);
+        log.info("Executing SQL: {}", sql);
+        jdbcTemplate.execute(sql);
+    }
+
+    public Set<String> getAllTablesInDatabase(String database) {
+        String sql = "SELECT TABLE_NAME FROM information_schema.TABLES t WHERE t.TABLE_SCHEMA = ?";
+        return new HashSet<>(jdbcTemplate.queryForList(sql, String.class, database));
     }
 
     private static String buildPrivilegeString(EnumSet<Privilege> privileges) {
