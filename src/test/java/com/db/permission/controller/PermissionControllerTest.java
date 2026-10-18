@@ -1,18 +1,28 @@
 package com.db.permission.controller;
 
+import java.sql.SQLInvalidAuthorizationSpecException;
+import java.sql.SQLSyntaxErrorException;
+import java.sql.SQLTransientConnectionException;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.dao.PermissionDeniedDataAccessException;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.BadSqlGrammarException;
+import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -21,6 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.db.permission.exception.DatabaseExceptionMapper;
 import com.db.permission.exception.ErrorCode;
 import com.db.permission.exception.PermissionException;
 import com.db.permission.service.PermissionService;
@@ -140,6 +151,45 @@ class PermissionControllerTest {
                 .andExpect(jsonPath("$.errorCode").value("MALFORMED_REQUEST"))
                 .andExpect(jsonPath("$.detail").value("Table shop.orders is not valid"))
                 .andExpect(jsonPath("$.action").value(ErrorCode.MALFORMED_REQUEST.getAction()));
+    }
+
+    static Stream<Arguments> databaseErrors() {
+        String sql = "GRANT SELECT ON shop.orders TO 'sourabh'";
+        return Stream.of(
+                Arguments.of(new PermissionDeniedDataAccessException("grant",
+                        new SQLInvalidAuthorizationSpecException("no user", "28000", 1133)),
+                        404, ErrorCode.USER_NOT_FOUND, "Account sourabh does not exist."),
+                Arguments.of(new BadSqlGrammarException("grant", sql,
+                        new SQLSyntaxErrorException("no table", "42S02", 1146)),
+                        404, ErrorCode.TABLE_NOT_FOUND, "Table orders does not exist."),
+                Arguments.of(new BadSqlGrammarException("revoke", sql,
+                        new SQLSyntaxErrorException("no grant", "42000", 1147)),
+                        404, ErrorCode.GRANT_NOT_FOUND,
+                        "sourabh has no privileges on orders to revoke, or the account does not exist."),
+                Arguments.of(new PermissionDeniedDataAccessException("grant",
+                        new SQLSyntaxErrorException("access denied", "42000", 1142)),
+                        403, ErrorCode.SERVICE_ACCOUNT_NOT_PERMITTED,
+                        "The service account cannot manage privileges on orders, or the database does not exist."),
+                Arguments.of(new CannotGetJdbcConnectionException("no connection",
+                        new SQLTransientConnectionException("timed out")),
+                        503, ErrorCode.DATABASE_UNAVAILABLE,
+                        "The database could not be reached or did not respond in time."));
+    }
+
+    @ParameterizedTest(name = "{2} -> {1}")
+    @MethodSource("databaseErrors")
+    void grantMapsDatabaseErrorToProblemResponse(Exception dbException, int expectedStatus,
+            ErrorCode expectedCode, String expectedDetail) throws Exception {
+        doThrow(DatabaseExceptionMapper.map(dbException, "sourabh", "orders"))
+                .when(permissionService).grantPermission(any(), any(), any(), any());
+
+        grant(VALID_REQUEST)
+                .andExpect(status().is(expectedStatus))
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.status").value(expectedStatus))
+                .andExpect(jsonPath("$.errorCode").value(expectedCode.name()))
+                .andExpect(jsonPath("$.detail").value(expectedDetail))
+                .andExpect(jsonPath("$.action").value(expectedCode.getAction()));
     }
 
     @Test

@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import com.db.permission.exception.DatabaseExceptionMapper;
 import com.db.permission.repository.PermissionRepository;
 
 @Service
@@ -21,7 +22,12 @@ public class PermissionService {
 
     public void grantPermission(String username, String database, String table, List<String> permissions) {
         log.info("Granting permissions {} to user {} on {}.{}", permissions, username, database, table);
-        permissionRepository.grant(username, database, table, permissions);
+        try {
+            permissionRepository.grant(username, database, table, permissions);
+        } catch (Exception e) {
+            log.error("Error granting permissions: {}", e.getMessage(), e);
+            throw DatabaseExceptionMapper.map(e, username, table);
+        }
     }
 
 }
