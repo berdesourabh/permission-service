@@ -1,3 +1,14 @@
 spring:
   application:
     name: permission-service
+  config:
+    import: optional:file:.env[.properties]
+  datasource:
+    url: jdbc:mariadb://localhost:3306?connectTimeout=3000&socketTimeout=10000
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.mariadb.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 30000
+      connection-init-sql: SET SESSION sql_mode = CONCAT(@@sql_mode, ',NO_AUTO_CREATE_USER')
