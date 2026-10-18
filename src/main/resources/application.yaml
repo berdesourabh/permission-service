@@ -12,3 +12,8 @@ spring:
       maximum-pool-size: 10
       connection-timeout: 30000
       connection-init-sql: SET SESSION sql_mode = CONCAT(@@sql_mode, ',NO_AUTO_CREATE_USER')
+
+permission-service:
+  restricted-schemas:
+    ["mysql", "information_schema", "performance_schema", "sys"]
+  protected-users: ["root", "mariadb.sys"]

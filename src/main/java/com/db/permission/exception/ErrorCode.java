@@ -19,7 +19,13 @@ public enum ErrorCode {
     DATABASE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE,
             "The database could not be reached or did not respond in time."),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR,
-            "Unexpected error. Check the service logs around the time of the request.");
+            "Unexpected error. Check the service logs around the time of the request."),
+    INVALID_ARGUMENTS(HttpStatus.BAD_REQUEST,
+            "Invalid arguments provided. Please check the request parameters and try again."),
+    PROTECTED_ACCOUNT(HttpStatus.FORBIDDEN,
+            "This account cannot be changed through the service. Ask a DBA."),
+    SCHEMA_NOT_ALLOWED(HttpStatus.FORBIDDEN,
+            "This schema cannot be managed through the service. Ask a DBA.");
 
     private final HttpStatus status;
     private final String action;

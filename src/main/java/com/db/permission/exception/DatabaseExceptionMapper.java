@@ -11,7 +11,7 @@ public class DatabaseExceptionMapper {
 
     private static final Logger log = LoggerFactory.getLogger(DatabaseExceptionMapper.class);
 
-    public static PermissionException map(Exception e, String account, String table) {
+    public static PermissionException map(Exception e, String account, String database, String table) {
         int dbErrorCode = e.getCause() instanceof SQLException sql ? sql.getErrorCode() : 0;
 
         log.warn("Database error {} for {} on {}: {}", dbErrorCode, account, table, e.getMessage());
@@ -25,7 +25,7 @@ public class DatabaseExceptionMapper {
                 account + " has no privileges on " + table + " to revoke, or the account does not exist.");
             case 1146 ->
                 new PermissionException(ErrorCode.TABLE_NOT_FOUND,
-                "Table " + table + " does not exist.");
+                "Database " + database + " or table " + table + " does not exist.");
             case 1044, 1142 ->
                 new PermissionException(ErrorCode.SERVICE_ACCOUNT_NOT_PERMITTED,
                 "The service account cannot manage privileges on " + table + ", or the database does not exist.");
