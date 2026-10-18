@@ -43,4 +43,17 @@ public class PermissionController {
         return ResponseEntity.ok(response);
     }
 
+    @PostMapping("/revoke")
+    public ResponseEntity<PermissionReponse> revokePermission(@Valid @RequestBody PermissionChangeRequest request) {
+        log.info("Received request to revoke permissions: {}", request);
+        EnumSet<Privilege> privileges = permissionService.revokePermission(request);
+        List<String> privilegeNames = privileges.stream().map(Privilege::name).toList();
+        PermissionReponse response = new PermissionReponse("Permissions revoked successfully",
+                request.username(),
+                request.database(),
+                request.table(),
+                privilegeNames);
+        return ResponseEntity.ok(response);
+
+    }
 }

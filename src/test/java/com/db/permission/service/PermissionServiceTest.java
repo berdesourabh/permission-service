@@ -6,6 +6,7 @@ import java.sql.SQLTransientConnectionException;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -20,8 +21,11 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.PermissionDeniedDataAccessException;
 import org.springframework.jdbc.BadSqlGrammarException;
@@ -53,6 +57,8 @@ class PermissionServiceTest {
                 new ArrayList<>(List.of("mysql", "information_schema", "performance_schema", "sys")),
                 new ArrayList<>(List.of("root", "mariadb.sys")));
         permissionService = new PermissionService(permissionRepository, properties);
+        // Most tests target shop.orders; the existence-check tests override this.
+        lenient().when(permissionRepository.getAllTablesInDatabase("shop")).thenReturn(Set.of("orders", "customers"));
     }
 
     @Test
@@ -61,6 +67,16 @@ class PermissionServiceTest {
 
         verify(permissionRepository).grant("sourabh", "shop", "orders", SELECT_INSERT);
         assertThat(granted).isEqualTo(SELECT_INSERT);
+    }
+
+    @Test
+    void grantPermissionSupportsCreateDropAndAlter() {
+        EnumSet<Privilege> granted = permissionService.grantPermission(
+                new PermissionChangeRequest("sourabh", "shop", "orders", List.of("drop", "Create", "ALTER")));
+
+        EnumSet<Privilege> expected = EnumSet.of(Privilege.CREATE, Privilege.DROP, Privilege.ALTER);
+        verify(permissionRepository).grant("sourabh", "shop", "orders", expected);
+        assertThat(granted).isEqualTo(expected);
     }
 
     @Test
@@ -134,7 +150,9 @@ class PermissionServiceTest {
                 Arguments.of("blank username", new PermissionChangeRequest("", "shop", "orders", List.of("SELECT"))),
                 Arguments.of("null database", new PermissionChangeRequest("sourabh", null, "orders", List.of("SELECT"))),
                 Arguments.of("table over 64 chars", new PermissionChangeRequest("sourabh", "shop", "t".repeat(65), List.of("SELECT"))),
-                Arguments.of("username over 80 chars", new PermissionChangeRequest("u".repeat(81), "shop", "orders", List.of("SELECT"))));
+                Arguments.of("username over 80 chars", new PermissionChangeRequest("u".repeat(81), "shop", "orders", List.of("SELECT"))),
+                Arguments.of("unsupported privilege", new PermissionChangeRequest("sourabh", "shop", "orders", List.of("EXECUTE"))),
+                Arguments.of("empty privileges", new PermissionChangeRequest("sourabh", "shop", "orders", List.of())));
     }
 
     @ParameterizedTest(name = "{0}")
@@ -200,5 +218,40 @@ class PermissionServiceTest {
                 .isInstanceOf(PermissionException.class)
                 .hasMessage("Unexpected database error.")
                 .extracting("errorCode").isEqualTo(ErrorCode.INTERNAL_ERROR);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"SELECT", "ALL"})
+    void grantPermissionRejectsMissingTableBeforeGranting(String privilege) {
+        // ALL includes CREATE, which MariaDB would otherwise accept on a table that does not exist.
+        assertThatThrownBy(() -> permissionService.grantPermission(
+                new PermissionChangeRequest("sourabh", "shop", "orders1", List.of(privilege))))
+                .isInstanceOf(PermissionException.class)
+                .hasMessage("Invalid database or table name provided. Please check and try again")
+                .extracting("errorCode").isEqualTo(ErrorCode.TABLE_NOT_FOUND);
+
+        verify(permissionRepository, never()).grant(any(), any(), any(), any());
+    }
+
+    @Test
+    void grantPermissionRejectsMissingDatabaseBeforeGranting() {
+        when(permissionRepository.getAllTablesInDatabase("nodb")).thenReturn(Set.of());
+
+        assertThatThrownBy(() -> permissionService.grantPermission(
+                new PermissionChangeRequest("sourabh", "nodb", "orders", List.of("ALL"))))
+                .isInstanceOf(PermissionException.class)
+                .hasMessage("Invalid database or table name provided. Please check and try again")
+                .extracting("errorCode").isEqualTo(ErrorCode.TABLE_NOT_FOUND);
+
+        verify(permissionRepository, never()).grant(any(), any(), any(), any());
+    }
+
+    @Test
+    void grantPermissionMatchesTableNameExactly() {
+        assertThatThrownBy(() -> permissionService.grantPermission(
+                new PermissionChangeRequest("sourabh", "shop", "Orders", List.of("SELECT"))))
+                .extracting("errorCode").isEqualTo(ErrorCode.TABLE_NOT_FOUND);
+
+        verify(permissionRepository, never()).grant(any(), any(), any(), any());
     }
 }

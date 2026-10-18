@@ -5,5 +5,8 @@ public enum Privilege {
     INSERT,
     UPDATE,
     DELETE,
+    CREATE,
+    DROP,
+    ALTER,
     ALL
 }

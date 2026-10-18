@@ -98,6 +98,28 @@ class PermissionControllerTest {
     }
 
     @Test
+    void grantResponseListsPrivilegesReturnedByService() throws Exception {
+        when(permissionService.grantPermission(any())).thenReturn(EnumSet.of(Privilege.SELECT));
+
+        grant(body("sourabh", "shop", "orders", "[\"select\", \"SELECT\"]"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.permissions.length()").value(1))
+                .andExpect(jsonPath("$.permissions[0]").value("SELECT"));
+    }
+
+    @Test
+    void grantAcceptsCreateDropAndAlter() throws Exception {
+        when(permissionService.grantPermission(any())).thenReturn(EnumSet.of(Privilege.CREATE, Privilege.DROP, Privilege.ALTER));
+
+        grant(body("sourabh", "shop", "orders", "[\"create\", \"DROP\", \"Alter\"]"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.permissions[*]").value(containsInAnyOrder("CREATE", "DROP", "ALTER")));
+
+        verify(permissionService).grantPermission(
+                new PermissionChangeRequest("sourabh", "shop", "orders", List.of("create", "DROP", "Alter")));
+    }
+
+    @Test
     void grantAcceptsHyphenAndDollarInNames() throws Exception {
         when(permissionService.grantPermission(any())).thenReturn(EnumSet.of(Privilege.SELECT));
 
@@ -125,13 +147,13 @@ class PermissionControllerTest {
 
     @Test
     void grantWithUnsupportedPermissionReturnsValidationFailed() throws Exception {
-        grant(body("sourabh", "shop", "orders", "[\"SELECT\", \"DROP\"]"))
+        grant(body("sourabh", "shop", "orders", "[\"SELECT\", \"EXECUTE\"]"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode").value("VALIDATION_FAILED"))
                 .andExpect(jsonPath("$.errors.length()").value(1))
                 .andExpect(jsonPath("$.errors[0].field").value("permissions[1]"))
                 .andExpect(jsonPath("$.errors[0].message")
-                        .value("must be one of: SELECT, INSERT, UPDATE, DELETE, ALL"));
+                        .value("must be one of: SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, ALL"));
 
         verifyNoInteractions(permissionService);
     }

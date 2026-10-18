@@ -2,6 +2,7 @@ package com.db.permission.service;
 
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -43,7 +44,43 @@ public class PermissionService {
             }
 
             EnumSet<Privilege> privileges = getPrivileges(request.permissions());
+
+            Set<String> tables = permissionRepository.getAllTablesInDatabase(request.database());
+            if (tables.isEmpty() || !tables.contains(request.table())) {
+                throw new PermissionException(ErrorCode.TABLE_NOT_FOUND, "Invalid database or table name provided. Please check and try again");
+            }
+
             permissionRepository.grant(request.username(), validateDatabaseTableName(request.database()) ? request.database() : null,
+                    validateDatabaseTableName(request.table()) ? request.table() : null,
+                    privileges);
+            return privileges;
+        } catch (PermissionException e) {
+            throw e;
+        } catch (IllegalArgumentException e) {
+            throw new PermissionException(ErrorCode.INVALID_ARGUMENTS, "Invalid arguments provided. Please check the request parameters and try again.");
+        } catch (Exception e) {
+            throw DatabaseExceptionMapper.map(e, request.username(), request.database(), request.table());
+        }
+    }
+
+    public EnumSet<Privilege> revokePermission(PermissionChangeRequest request) {
+        log.info("Revoking permissions {} from user {} on {}.{}", request.permissions(), request.username(), request.database(), request.table());
+        try {
+            boolean isValidArguements = validate(request);
+            checkNotProtected(request.username(), request.database());
+
+            if (!isValidArguements) {
+                throw new PermissionException(ErrorCode.INVALID_ARGUMENTS, "Invalid arguments provided. Please check the request parameters and try again.");
+            }
+
+            EnumSet<Privilege> privileges = getPrivileges(request.permissions());
+
+            Set<String> tables = permissionRepository.getAllTablesInDatabase(request.database());
+            if (tables.isEmpty() || !tables.contains(request.table())) {
+                throw new PermissionException(ErrorCode.TABLE_NOT_FOUND, "Invalid database or table name provided. Please check and try again");
+            }
+
+            permissionRepository.revoke(request.username(), validateDatabaseTableName(request.database()) ? request.database() : null,
                     validateDatabaseTableName(request.table()) ? request.table() : null,
                     privileges);
             return privileges;
