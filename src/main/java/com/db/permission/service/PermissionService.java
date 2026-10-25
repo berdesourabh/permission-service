@@ -7,11 +7,13 @@ import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
 import com.db.permission.config.PermissionServiceProperties;
 import com.db.permission.dto.PermissionChangeRequest;
 import com.db.permission.dto.Privilege;
+import com.db.permission.dto.TableGrant;
 import com.db.permission.exception.DatabaseExceptionMapper;
 import com.db.permission.exception.ErrorCode;
 import com.db.permission.exception.PermissionException;
@@ -36,10 +38,10 @@ public class PermissionService {
     public EnumSet<Privilege> grantPermission(PermissionChangeRequest request) {
         log.info("Granting permissions {} to user {} on {}.{}", request.permissions(), request.username(), request.database(), request.table());
         try {
-            boolean isValidArguements = validate(request);
+            boolean isValidArguments = validate(request);
             checkNotProtected(request.username(), request.database());
 
-            if (!isValidArguements) {
+            if (!isValidArguments) {
                 throw new PermissionException(ErrorCode.INVALID_ARGUMENTS, "Invalid arguments provided. Please check the request parameters and try again.");
             }
 
@@ -66,10 +68,10 @@ public class PermissionService {
     public EnumSet<Privilege> revokePermission(PermissionChangeRequest request) {
         log.info("Revoking permissions {} from user {} on {}.{}", request.permissions(), request.username(), request.database(), request.table());
         try {
-            boolean isValidArguements = validate(request);
+            boolean isValidArguments = validate(request);
             checkNotProtected(request.username(), request.database());
 
-            if (!isValidArguements) {
+            if (!isValidArguments) {
                 throw new PermissionException(ErrorCode.INVALID_ARGUMENTS, "Invalid arguments provided. Please check the request parameters and try again.");
             }
 
@@ -90,6 +92,14 @@ public class PermissionService {
             throw new PermissionException(ErrorCode.INVALID_ARGUMENTS, "Invalid arguments provided. Please check the request parameters and try again.");
         } catch (Exception e) {
             throw DatabaseExceptionMapper.map(e, request.username(), request.database(), request.table());
+        }
+    }
+
+    public List<TableGrant> getPermissionsForUser(String username) {
+        try {
+            return permissionRepository.findGrantsByUsername(username);
+        } catch (DataAccessException exception) {
+            throw DatabaseExceptionMapper.map(exception, username, null, null);
         }
     }
 
