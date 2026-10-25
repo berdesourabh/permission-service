@@ -1,19 +1,21 @@
 package com.db.permission.controller;
 
-import java.sql.SQLInvalidAuthorizationSpecException;
-import java.sql.SQLSyntaxErrorException;
-import java.sql.SQLTransientConnectionException;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
@@ -21,13 +23,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
-import org.springframework.dao.PermissionDeniedDataAccessException;
 import org.springframework.http.MediaType;
-import org.springframework.jdbc.BadSqlGrammarException;
-import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -35,7 +35,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.db.permission.dto.PermissionChangeRequest;
 import com.db.permission.dto.Privilege;
-import com.db.permission.exception.DatabaseExceptionMapper;
+import com.db.permission.dto.TableGrant;
 import com.db.permission.exception.ErrorCode;
 import com.db.permission.exception.PermissionException;
 import com.db.permission.service.PermissionService;
@@ -43,14 +43,7 @@ import com.db.permission.service.PermissionService;
 @WebMvcTest(PermissionController.class)
 class PermissionControllerTest {
 
-    private static final String VALID_REQUEST = """
-            {
-              "username": "sourabh",
-              "database": "shop",
-              "table": "orders",
-              "permissions": ["SELECT", "INSERT"]
-            }
-            """;
+    private static final String VALID_REQUEST = body("sourabh", "shop", "orders", "[\"SELECT\", \"INSERT\"]");
 
     @Autowired
     private MockMvc mockMvc;
@@ -58,259 +51,249 @@ class PermissionControllerTest {
     @MockitoBean
     private PermissionService permissionService;
 
-    @Test
-    void grantReturnsOkWithGrantedPermissions() throws Exception {
-        when(permissionService.grantPermission(any())).thenReturn(EnumSet.of(Privilege.SELECT, Privilege.INSERT));
+    enum Endpoint {
+        GRANT("/permissions/grant", "Permissions granted successfully"),
+        REVOKE("/permissions/revoke", "Permissions revoked successfully");
 
-        grant(VALID_REQUEST)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("Permissions granted successfully"))
-                .andExpect(jsonPath("$.username").value("sourabh"))
-                .andExpect(jsonPath("$.database").value("shop"))
-                .andExpect(jsonPath("$.table").value("orders"))
-                .andExpect(jsonPath("$.permissions[0]").value("SELECT"))
-                .andExpect(jsonPath("$.permissions[1]").value("INSERT"));
+        private final String path;
+        private final String message;
 
-        verify(permissionService).grantPermission(
-                new PermissionChangeRequest("sourabh", "shop", "orders", List.of("SELECT", "INSERT")));
+        Endpoint(String path, String message) {
+            this.path = path;
+            this.message = message;
+        }
+
+        // Works for when(...), verify(...) and doThrow(...).when(...) alike.
+        EnumSet<Privilege> invoke(PermissionService service, PermissionChangeRequest request) {
+            return this == GRANT ? service.grantPermission(request) : service.revokePermission(request);
+        }
     }
 
-    @Test
-    void grantAcceptsPermissionsCaseInsensitively() throws Exception {
-        when(permissionService.grantPermission(any())).thenReturn(EnumSet.of(Privilege.SELECT, Privilege.INSERT));
+    @Nested
+    class GrantAndRevoke {
 
-        grant(body("sourabh", "shop", "orders", "[\"select\", \"Insert\"]"))
-                .andExpect(status().isOk());
+        @ParameterizedTest
+        @EnumSource(Endpoint.class)
+        void returnsPrivilegesFromService(Endpoint endpoint) throws Exception {
+            when(endpoint.invoke(permissionService, any())).thenReturn(EnumSet.of(Privilege.SELECT, Privilege.INSERT));
 
-        verify(permissionService).grantPermission(
-                new PermissionChangeRequest("sourabh", "shop", "orders", List.of("select", "Insert")));
+            send(endpoint, VALID_REQUEST)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.message").value(endpoint.message))
+                    .andExpect(jsonPath("$.username").value("sourabh"))
+                    .andExpect(jsonPath("$.database").value("shop"))
+                    .andExpect(jsonPath("$.table").value("orders"))
+                    .andExpect(jsonPath("$.permissions[0]").value("SELECT"))
+                    .andExpect(jsonPath("$.permissions[1]").value("INSERT"));
+
+            endpoint.invoke(verify(permissionService),
+                    new PermissionChangeRequest("sourabh", "shop", "orders", List.of("SELECT", "INSERT")));
+        }
+
+        @ParameterizedTest
+        @EnumSource(Endpoint.class)
+        void responseListsPrivilegesReturnedByServiceNotRequested(Endpoint endpoint) throws Exception {
+            when(endpoint.invoke(permissionService, any())).thenReturn(EnumSet.of(Privilege.ALL));
+
+            send(endpoint, body("sourabh", "shop", "orders", "[\"select\", \"ALL\"]"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.permissions.length()").value(1))
+                    .andExpect(jsonPath("$.permissions[0]").value("ALL"));
+        }
+
+        @ParameterizedTest(name = "{0} {1}")
+        @MethodSource("com.db.permission.controller.PermissionControllerTest#validRequests")
+        void acceptsValidRequest(Endpoint endpoint, String label, PermissionChangeRequest request) throws Exception {
+            when(endpoint.invoke(permissionService, any())).thenReturn(EnumSet.of(Privilege.SELECT));
+
+            send(endpoint, body(request)).andExpect(status().isOk());
+
+            endpoint.invoke(verify(permissionService), request);
+        }
+
+        @ParameterizedTest
+        @EnumSource(Endpoint.class)
+        void rejectsMissingFields(Endpoint endpoint) throws Exception {
+            send(endpoint, "{}")
+                    .andExpect(status().isBadRequest())
+                    .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.errorCode").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.detail").value("One or more fields are invalid."))
+                    .andExpect(jsonPath("$.action").value(ErrorCode.VALIDATION_FAILED.getAction()))
+                    .andExpect(jsonPath("$.errors[*].field")
+                            .value(containsInAnyOrder("username", "database", "table", "permissions")));
+
+            verifyNoInteractions(permissionService);
+        }
+
+        @ParameterizedTest(name = "{0} {1}")
+        @MethodSource("com.db.permission.controller.PermissionControllerTest#invalidFields")
+        void rejectsInvalidField(Endpoint endpoint, String label, String body, String field, String message)
+                throws Exception {
+            send(endpoint, body)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorCode").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.errors.length()").value(1))
+                    .andExpect(jsonPath("$.errors[0].field").value(field))
+                    .andExpect(jsonPath("$.errors[0].message").value(message));
+
+            verifyNoInteractions(permissionService);
+        }
+
+        @ParameterizedTest(name = "{0} body \"{1}\"")
+        @MethodSource("com.db.permission.controller.PermissionControllerTest#unreadableBodies")
+        void rejectsUnreadableBody(Endpoint endpoint, String body) throws Exception {
+            send(endpoint, body)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                    .andExpect(jsonPath("$.errorCode").value("MALFORMED_REQUEST"))
+                    .andExpect(jsonPath("$.detail").value("Request body is missing or is not valid JSON."))
+                    .andExpect(jsonPath("$.action").value(ErrorCode.MALFORMED_REQUEST.getAction()));
+
+            verifyNoInteractions(permissionService);
+        }
+
+        @ParameterizedTest(name = "{0} {1}")
+        @MethodSource("com.db.permission.controller.PermissionControllerTest#serviceErrors")
+        void returnsProblemResponseForServiceError(Endpoint endpoint, ErrorCode code) throws Exception {
+            endpoint.invoke(doThrow(new PermissionException(code, "detail for " + code)).when(permissionService), any());
+
+            send(endpoint, VALID_REQUEST)
+                    .andExpect(status().is(code.getStatus().value()))
+                    .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                    .andExpect(jsonPath("$.status").value(code.getStatus().value()))
+                    .andExpect(jsonPath("$.errorCode").value(code.name()))
+                    .andExpect(jsonPath("$.detail").value("detail for " + code))
+                    .andExpect(jsonPath("$.action").value(code.getAction()));
+        }
+
+        @ParameterizedTest
+        @EnumSource(Endpoint.class)
+        void returnsInternalErrorWithoutLeakingDetails(Endpoint endpoint) throws Exception {
+            endpoint.invoke(doThrow(new IllegalStateException("connection refused to db-host:3306")).when(permissionService), any());
+
+            send(endpoint, VALID_REQUEST)
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.errorCode").value("INTERNAL_ERROR"))
+                    .andExpect(jsonPath("$.detail").value("An unexpected error occurred."))
+                    .andExpect(jsonPath("$.action").value(ErrorCode.INTERNAL_ERROR.getAction()))
+                    .andExpect(content().string(not(containsString("db-host"))));
+        }
     }
 
-    @Test
-    void grantAcceptsAllPermission() throws Exception {
-        when(permissionService.grantPermission(any())).thenReturn(EnumSet.of(Privilege.ALL));
+    @Nested
+    class GetPermissions {
 
-        grant(body("sourabh", "shop", "orders", "[\"ALL\"]"))
-                .andExpect(status().isOk());
+        @Test
+        void returnsGrantsForUser() throws Exception {
+            when(permissionService.getPermissionsForUser("sourabh")).thenReturn(List.of(
+                    new TableGrant("%", "shop", "customers", List.of("UPDATE")),
+                    new TableGrant("localhost", "shop", "orders", List.of("SELECT", "INSERT"))));
 
-        verify(permissionService).grantPermission(
-                new PermissionChangeRequest("sourabh", "shop", "orders", List.of("ALL")));
+            mockMvc.perform(get("/permissions/sourabh"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.username").value("sourabh"))
+                    .andExpect(jsonPath("$.grants.length()").value(2))
+                    .andExpect(jsonPath("$.grants[0].host").value("%"))
+                    .andExpect(jsonPath("$.grants[0].database").value("shop"))
+                    .andExpect(jsonPath("$.grants[0].table").value("customers"))
+                    .andExpect(jsonPath("$.grants[0].privileges[0]").value("UPDATE"))
+                    .andExpect(jsonPath("$.grants[1].host").value("localhost"))
+                    .andExpect(jsonPath("$.grants[1].table").value("orders"))
+                    .andExpect(jsonPath("$.grants[1].privileges[1]").value("INSERT"));
+        }
+
+        @Test
+        void returnsEmptyGrantsWhenUserHasNone() throws Exception {
+            when(permissionService.getPermissionsForUser("sourabh")).thenReturn(List.of());
+
+            mockMvc.perform(get("/permissions/sourabh"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.grants").isEmpty());
+        }
+
+        @Test
+        void acceptsUsernameWithDot() throws Exception {
+            when(permissionService.getPermissionsForUser("sourabh.dev")).thenReturn(List.of());
+
+            mockMvc.perform(get("/permissions/sourabh.dev"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.username").value("sourabh.dev"));
+
+            verify(permissionService).getPermissionsForUser("sourabh.dev");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"bad'name", "bad name", "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"})
+        void rejectsInvalidUsername(String username) throws Exception {
+            mockMvc.perform(get("/permissions/{username}", username))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                    .andExpect(jsonPath("$.errorCode").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.action").value(ErrorCode.VALIDATION_FAILED.getAction()));
+
+            verifyNoInteractions(permissionService);
+        }
     }
 
-    @Test
-    void grantResponseListsPrivilegesReturnedByService() throws Exception {
-        when(permissionService.grantPermission(any())).thenReturn(EnumSet.of(Privilege.SELECT));
-
-        grant(body("sourabh", "shop", "orders", "[\"select\", \"SELECT\"]"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.permissions.length()").value(1))
-                .andExpect(jsonPath("$.permissions[0]").value("SELECT"));
-    }
-
-    @Test
-    void grantAcceptsCreateDropAndAlter() throws Exception {
-        when(permissionService.grantPermission(any())).thenReturn(EnumSet.of(Privilege.CREATE, Privilege.DROP, Privilege.ALTER));
-
-        grant(body("sourabh", "shop", "orders", "[\"create\", \"DROP\", \"Alter\"]"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.permissions[*]").value(containsInAnyOrder("CREATE", "DROP", "ALTER")));
-
-        verify(permissionService).grantPermission(
-                new PermissionChangeRequest("sourabh", "shop", "orders", List.of("create", "DROP", "Alter")));
-    }
-
-    @Test
-    void grantAcceptsHyphenAndDollarInNames() throws Exception {
-        when(permissionService.grantPermission(any())).thenReturn(EnumSet.of(Privilege.SELECT));
-
-        grant(body("sourabh.dev", "my-db", "orders$2026", "[\"SELECT\"]"))
-                .andExpect(status().isOk());
-
-        verify(permissionService).grantPermission(
-                new PermissionChangeRequest("sourabh.dev", "my-db", "orders$2026", List.of("SELECT")));
-    }
-
-    @Test
-    void grantWithMissingFieldsReturnsValidationFailed() throws Exception {
-        grant("{}")
-                .andExpect(status().isBadRequest())
-                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
-                .andExpect(jsonPath("$.status").value(400))
-                .andExpect(jsonPath("$.errorCode").value("VALIDATION_FAILED"))
-                .andExpect(jsonPath("$.detail").value("One or more fields are invalid."))
-                .andExpect(jsonPath("$.action").value(ErrorCode.VALIDATION_FAILED.getAction()))
-                .andExpect(jsonPath("$.errors[*].field")
-                        .value(containsInAnyOrder("username", "database", "table", "permissions")));
-
-        verifyNoInteractions(permissionService);
-    }
-
-    @Test
-    void grantWithUnsupportedPermissionReturnsValidationFailed() throws Exception {
-        grant(body("sourabh", "shop", "orders", "[\"SELECT\", \"EXECUTE\"]"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorCode").value("VALIDATION_FAILED"))
-                .andExpect(jsonPath("$.errors.length()").value(1))
-                .andExpect(jsonPath("$.errors[0].field").value("permissions[1]"))
-                .andExpect(jsonPath("$.errors[0].message")
-                        .value("must be one of: SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, ALL"));
-
-        verifyNoInteractions(permissionService);
+    static Stream<Arguments> validRequests() {
+        return forEachEndpoint(Stream.of(
+                Arguments.of("mixed-case privileges", new PermissionChangeRequest("sourabh", "shop", "orders", List.of("select", "Insert"))),
+                Arguments.of("ALL", new PermissionChangeRequest("sourabh", "shop", "orders", List.of("ALL"))),
+                Arguments.of("CREATE, DROP, ALTER", new PermissionChangeRequest("sourabh", "shop", "orders", List.of("create", "DROP", "Alter"))),
+                Arguments.of("dot, hyphen and dollar in names", new PermissionChangeRequest("sourabh.dev", "my-db", "orders$2026", List.of("SELECT")))));
     }
 
     static Stream<Arguments> invalidFields() {
-        return Stream.of(
-                Arguments.of("username injection", body("sourabh'@'%' WITH GRANT OPTION #", "shop", "orders", "[\"SELECT\"]"),
-                        "username", "must be a valid username"),
-                Arguments.of("table injection", body("sourabh", "shop", "orders TO 'dinesh'@'%' #", "[\"SELECT\"]"),
-                        "table", "must be a valid table name"),
-                Arguments.of("database wildcard", body("sourabh", "*", "orders", "[\"SELECT\"]"),
-                        "database", "must be a valid database name"),
-                Arguments.of("table wildcard", body("sourabh", "shop", "*", "[\"SELECT\"]"),
-                        "table", "must be a valid table name"),
-                Arguments.of("blank username", body("", "shop", "orders", "[\"SELECT\"]"),
-                        "username", "must be a valid username"),
-                Arguments.of("blank database", body("sourabh", "", "orders", "[\"SELECT\"]"),
-                        "database", "must be a valid database name"),
-                Arguments.of("whitespace table", body("sourabh", "shop", "  ", "[\"SELECT\"]"),
-                        "table", "must be a valid table name"),
-                Arguments.of("space in table", body("sourabh", "shop", "order by", "[\"SELECT\"]"),
-                        "table", "must be a valid table name"),
-                Arguments.of("table over 64 chars", body("sourabh", "shop", "t".repeat(65), "[\"SELECT\"]"),
-                        "table", "must be a valid table name"),
-                Arguments.of("username over 80 chars", body("u".repeat(81), "shop", "orders", "[\"SELECT\"]"),
-                        "username", "must be a valid username"));
+        String username = "must be a valid username";
+        String database = "must be a valid database name";
+        String table = "must be a valid table name";
+        return forEachEndpoint(Stream.of(
+                Arguments.of("username injection", body("sourabh'@'%' WITH GRANT OPTION #", "shop", "orders", "[\"SELECT\"]"), "username", username),
+                Arguments.of("table injection", body("sourabh", "shop", "orders TO 'dinesh'@'%' #", "[\"SELECT\"]"), "table", table),
+                Arguments.of("database wildcard", body("sourabh", "*", "orders", "[\"SELECT\"]"), "database", database),
+                Arguments.of("table wildcard", body("sourabh", "shop", "*", "[\"SELECT\"]"), "table", table),
+                Arguments.of("blank username", body("", "shop", "orders", "[\"SELECT\"]"), "username", username),
+                Arguments.of("blank database", body("sourabh", "", "orders", "[\"SELECT\"]"), "database", database),
+                Arguments.of("whitespace table", body("sourabh", "shop", "  ", "[\"SELECT\"]"), "table", table),
+                Arguments.of("space in table", body("sourabh", "shop", "order by", "[\"SELECT\"]"), "table", table),
+                Arguments.of("table over 64 chars", body("sourabh", "shop", "t".repeat(65), "[\"SELECT\"]"), "table", table),
+                Arguments.of("username over 80 chars", body("u".repeat(81), "shop", "orders", "[\"SELECT\"]"), "username", username),
+                Arguments.of("unsupported privilege", body("sourabh", "shop", "orders", "[\"SELECT\", \"EXECUTE\"]"), "permissions[1]",
+                        "must be one of: SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, ALL")));
     }
 
-    @ParameterizedTest(name = "{0}")
-    @MethodSource("invalidFields")
-    void grantRejectsInvalidFieldBeforeCallingService(String label, String body, String field, String message)
-            throws Exception {
-        grant(body)
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorCode").value("VALIDATION_FAILED"))
-                .andExpect(jsonPath("$.errors.length()").value(1))
-                .andExpect(jsonPath("$.errors[0].field").value(field))
-                .andExpect(jsonPath("$.errors[0].message").value(message));
-
-        verifyNoInteractions(permissionService);
+    static Stream<Arguments> unreadableBodies() {
+        return forEachEndpoint(Stream.of(Arguments.of("{not json"), Arguments.of("")));
     }
 
-    @Test
-    void grantWithMalformedJsonReturnsMalformedRequest() throws Exception {
-        grant("{not json")
-                .andExpect(status().isBadRequest())
-                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
-                .andExpect(jsonPath("$.status").value(400))
-                .andExpect(jsonPath("$.errorCode").value("MALFORMED_REQUEST"))
-                .andExpect(jsonPath("$.detail").value("Request body is missing or is not valid JSON."))
-                .andExpect(jsonPath("$.action").value(ErrorCode.MALFORMED_REQUEST.getAction()));
-
-        verifyNoInteractions(permissionService);
+    static Stream<Arguments> serviceErrors() {
+        return forEachEndpoint(Arrays.stream(ErrorCode.values()).map(Arguments::of));
     }
 
-    @Test
-    void grantWithEmptyBodyReturnsMalformedRequest() throws Exception {
-        grant("")
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorCode").value("MALFORMED_REQUEST"));
-
-        verifyNoInteractions(permissionService);
+    private static Stream<Arguments> forEachEndpoint(Stream<Arguments> cases) {
+        List<Arguments> caseList = cases.toList();
+        return Arrays.stream(Endpoint.values()).flatMap(endpoint -> caseList.stream()
+                .map(c -> {
+                    Object[] values = new Object[c.get().length + 1];
+                    values[0] = endpoint;
+                    System.arraycopy(c.get(), 0, values, 1, c.get().length);
+                    return Arguments.of(values);
+                }));
     }
 
-    @Test
-    void grantReturnsInvalidArgumentsWhenServiceRejectsRequest() throws Exception {
-        doThrow(new PermissionException(ErrorCode.INVALID_ARGUMENTS,
-                "Invalid arguments provided. Please check the request parameters and try again."))
-                .when(permissionService).grantPermission(any());
-
-        grant(VALID_REQUEST)
-                .andExpect(status().isBadRequest())
-                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
-                .andExpect(jsonPath("$.errorCode").value("INVALID_ARGUMENTS"))
-                .andExpect(jsonPath("$.detail")
-                        .value("Invalid arguments provided. Please check the request parameters and try again."))
-                .andExpect(jsonPath("$.action").value(ErrorCode.INVALID_ARGUMENTS.getAction()));
-    }
-
-    static Stream<Arguments> forbiddenErrors() {
-        return Stream.of(
-                Arguments.of(ErrorCode.PROTECTED_ACCOUNT,
-                        "User 'root' is protected and cannot be changed through this service."),
-                Arguments.of(ErrorCode.SCHEMA_NOT_ALLOWED,
-                        "Database 'mysql' is a restricted schema and cannot be managed through this service."));
-    }
-
-    @ParameterizedTest(name = "{0}")
-    @MethodSource("forbiddenErrors")
-    void grantReturnsForbiddenWhenServiceRejectsAccountOrSchema(ErrorCode code, String detail) throws Exception {
-        doThrow(new PermissionException(code, detail)).when(permissionService).grantPermission(any());
-
-        grant(VALID_REQUEST)
-                .andExpect(status().isForbidden())
-                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
-                .andExpect(jsonPath("$.errorCode").value(code.name()))
-                .andExpect(jsonPath("$.detail").value(detail))
-                .andExpect(jsonPath("$.action").value(code.getAction()));
-    }
-
-    static Stream<Arguments> databaseErrors() {
-        String sql = "GRANT SELECT, INSERT ON shop.orders TO 'sourabh'";
-        return Stream.of(
-                Arguments.of(new PermissionDeniedDataAccessException("grant",
-                        new SQLInvalidAuthorizationSpecException("no user", "28000", 1133)),
-                        404, ErrorCode.USER_NOT_FOUND, "Account sourabh does not exist."),
-                Arguments.of(new BadSqlGrammarException("grant", sql,
-                        new SQLSyntaxErrorException("no table", "42S02", 1146)),
-                        404, ErrorCode.TABLE_NOT_FOUND, "Database shop or table orders does not exist."),
-                Arguments.of(new BadSqlGrammarException("revoke", sql,
-                        new SQLSyntaxErrorException("no grant", "42000", 1147)),
-                        404, ErrorCode.GRANT_NOT_FOUND,
-                        "sourabh has no privileges on orders to revoke, or the account does not exist."),
-                Arguments.of(new PermissionDeniedDataAccessException("grant",
-                        new SQLSyntaxErrorException("access denied", "42000", 1142)),
-                        403, ErrorCode.SERVICE_ACCOUNT_NOT_PERMITTED,
-                        "The service account cannot manage privileges on orders, or the database does not exist."),
-                Arguments.of(new CannotGetJdbcConnectionException("no connection",
-                        new SQLTransientConnectionException("timed out")),
-                        503, ErrorCode.DATABASE_UNAVAILABLE,
-                        "The database could not be reached or did not respond in time."));
-    }
-
-    @ParameterizedTest(name = "{2} -> {1}")
-    @MethodSource("databaseErrors")
-    void grantMapsDatabaseErrorToProblemResponse(Exception dbException, int expectedStatus,
-            ErrorCode expectedCode, String expectedDetail) throws Exception {
-        doThrow(DatabaseExceptionMapper.map(dbException, "sourabh", "shop", "orders"))
-                .when(permissionService).grantPermission(any());
-
-        grant(VALID_REQUEST)
-                .andExpect(status().is(expectedStatus))
-                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
-                .andExpect(jsonPath("$.status").value(expectedStatus))
-                .andExpect(jsonPath("$.errorCode").value(expectedCode.name()))
-                .andExpect(jsonPath("$.detail").value(expectedDetail))
-                .andExpect(jsonPath("$.action").value(expectedCode.getAction()));
-    }
-
-    @Test
-    void grantReturnsInternalErrorWithoutLeakingDetailsOnUnexpectedException() throws Exception {
-        doThrow(new IllegalStateException("connection refused to db-host:3306"))
-                .when(permissionService).grantPermission(any());
-
-        grant(VALID_REQUEST)
-                .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.status").value(500))
-                .andExpect(jsonPath("$.errorCode").value("INTERNAL_ERROR"))
-                .andExpect(jsonPath("$.detail").value("An unexpected error occurred."))
-                .andExpect(jsonPath("$.action").value(ErrorCode.INTERNAL_ERROR.getAction()))
-                .andExpect(content().string(not(containsString("db-host"))));
-    }
-
-    private ResultActions grant(String body) throws Exception {
-        return mockMvc.perform(post("/permissions/grant")
+    private ResultActions send(Endpoint endpoint, String body) throws Exception {
+        return mockMvc.perform(post(endpoint.path)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body));
+    }
+
+    private static String body(PermissionChangeRequest request) {
+        String permissions = request.permissions().stream()
+                .map(p -> "\"" + p + "\"")
+                .collect(Collectors.joining(", ", "[", "]"));
+        return body(request.username(), request.database(), request.table(), permissions);
     }
 
     private static String body(String username, String database, String table, String permissions) {
